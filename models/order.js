@@ -16,8 +16,9 @@ const orderSchema = new mongoose.Schema({
         enum: ['pending', 'picking', 'dispatched', 'delivered'],
         default: 'pending'
     },
-    riderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    riderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Rider' },
     pickerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
-module.exports = mongoose.model('Order', orderSchema);
+const Order = mongoose.model('Order', orderSchema);
+module.exports = Order;

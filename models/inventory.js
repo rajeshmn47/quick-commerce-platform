@@ -30,4 +30,5 @@ const inventorySchema = new mongoose.Schema({
 // Compound unique index to prevent duplicate product-store entries
 inventorySchema.index({ store_id: 1, product_id: 1 }, { unique: true });
 
-module.exports = mongoose.model('Inventory', inventorySchema);
+const Inventory = mongoose.model('Inventory', inventorySchema);
+module.exports = Inventory;

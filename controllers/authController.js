@@ -84,12 +84,14 @@ exports.login = async (req, res) => {
         });
 
         if (!user) {
+            console.log(user,"user")
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
+            console.log(password)
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 

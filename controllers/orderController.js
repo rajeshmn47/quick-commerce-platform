@@ -2,61 +2,153 @@ const Order = require('../models/order');
 const Inventory = require('../models/inventory');
 const Store = require('../models/store');
 const Product = require('../models/product');
+const Rider = require('../models/rider');
+const { assignRiderToOrder } = require('../services/riderAssignment');
+
+async function findBestStore(customerLat, customerLng, items) {
+    // 1️⃣ Find stores within 10 km
+    const nearbyStores = await Store.find({
+        location: {
+            $near: {
+                $geometry: {
+                    type: 'Point',
+                    coordinates: [
+                        customerLng,
+                        customerLat
+                    ]
+                },
+                $maxDistance: 100000 // 10 km
+            }
+        }
+    });
+    console.log(nearbyStores.length, customerLng, customerLat, "near by stores");
+
+    if (nearbyStores.length === 0) return null;
+
+    let eligibleStores = [];
+
+    // 2️⃣ Filter by inventory availability
+    for (const store of nearbyStores) {
+        let hasAllItems = true;
+        for (const item of items) {
+            const inventory = await Inventory.findOne({
+                store_id: store._id,
+                product_id: item.productId
+            });
+            if (!inventory || inventory.stock_quantity < item.quantity) {
+                hasAllItems = false;
+                break;
+            }
+        }
+        if (!hasAllItems) continue;
+
+        // 3️⃣ Check if store has an available rider
+        const rider = await Rider.findOne({
+            currentStoreId: store._id,
+            isAvailable: true,
+            $expr: { $lt: ['$activeOrdersCount', '$maxConcurrentOrders'] }
+        });
+
+        eligibleStores.push({
+            store,
+            hasRider: !!rider,
+            distance: calculateDistance(
+                customerLat, customerLng,
+                store.location.coordinates?.[1],
+                store.location.coordinates?.[0]
+            )
+        });
+    }
+
+    if (eligibleStores.length === 0) return null;
+
+    // 4️⃣ Sort: Has rider first, then closest
+    eligibleStores.sort((a, b) => {
+        if (a.hasRider && !b.hasRider) return -1;
+        if (!a.hasRider && b.hasRider) return 1;
+        return a.distance - b.distance;
+    });
+    console.log(eligibleStores, "stores");
+
+    return eligibleStores[0].store;
+}
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
 
 // ==================== CREATE ORDER ====================
 exports.createOrder = async (req, res) => {
     try {
-        const { 
-            storeId, 
-            customerName, 
-            customerPhone, 
-            address, 
-            items, 
+        const {
+            customerName,
+            customerPhone,
+            address,
+            items,
             totalAmount,
-            deliveryInstructions 
+            deliveryInstructions,
+            customerLatitude,    // 👈 New: from frontend
+            customerLongitude,   // 👈 New: from frontend
+            customerPincode,     // 👈 Optional fallback
         } = req.body;
 
-        // Validate required fields
-        if (!storeId || !customerName || !customerPhone || !address || !items || !totalAmount) {
-            return res.status(400).json({ 
-                error: 'Missing required fields: storeId, customerName, customerPhone, address, items, totalAmount' 
+        // ✅ Validate required fields
+        if (!customerName || !customerPhone || !address || !items || !totalAmount) {
+            return res.status(400).json({
+                error: 'Missing required fields: customerName, customerPhone, address, items, totalAmount'
             });
         }
 
-        // Check if store exists
-        const store = await Store.findById(storeId);
-        if (!store) {
-            return res.status(404).json({ error: 'Store not found' });
+        // ✅ Validate location
+        if (!customerLatitude || !customerLongitude) {
+            return res.status(400).json({
+                error: 'Customer location (latitude/longitude) is required'
+            });
         }
 
-        // Validate items and check inventory
+        // ✅ Find the best store based on location + inventory
+        const bestStore = await findBestStore(customerLatitude, customerLongitude, items);
+        if (!bestStore) {
+            return res.status(400).json({
+                error: 'No store available for delivery. Please try again later.'
+            });
+        }
+
+        const storeId = bestStore._id;
+
+        // ✅ Check inventory at the selected store
         for (const item of items) {
-            // Check if product exists
             const product = await Product.findById(item.productId);
             if (!product) {
                 return res.status(404).json({ error: `Product ${item.productId} not found` });
             }
 
-            // Check inventory for this product in the store
-            const inventory = await Inventory.findOne({ 
-                store_id: storeId, 
-                product_id: item.productId 
+            const inventory = await Inventory.findOne({
+                store_id: storeId,
+                product_id: item.productId
             });
 
             if (!inventory) {
-                return res.status(400).json({ 
-                    error: `Product "${product.name}" is not available in this store` 
+                return res.status(400).json({
+                    error: `Product "${product.name}" is not available at the nearest store`
                 });
             }
 
             if (inventory.stock_quantity < item.quantity) {
-                return res.status(400).json({ 
-                    error: `Insufficient stock for "${product.name}". Available: ${inventory.stock_quantity}` 
+                return res.status(400).json({
+                    error: `Insufficient stock for "${product.name}" at nearest store. Available: ${inventory.stock_quantity}`
                 });
             }
         }
 
-        // Create the order
+        // ✅ Create the order
         const newOrder = new Order({
             storeId,
             customerName,
@@ -65,30 +157,43 @@ exports.createOrder = async (req, res) => {
             items,
             totalAmount,
             deliveryInstructions: deliveryInstructions || '',
+            customerLocation: {
+                type: 'Point',
+                coordinates: {
+                    latitude: customerLatitude,
+                    longitude: customerLongitude
+                }
+            },
+            customerPincode: customerPincode || null,
             status: 'pending',
-            estimatedDeliveryTime: new Date(Date.now() + 15 * 60000), // 15 minutes from now
+            estimatedDeliveryTime: new Date(Date.now() + 15 * 60000),
         });
 
         await newOrder.save();
 
-        // ✅ Deduct stock from inventory (optimistic locking)
+        // ✅ Deduct stock from inventory
         for (const item of items) {
             await Inventory.findOneAndUpdate(
                 { store_id: storeId, product_id: item.productId },
                 { $inc: { stock_quantity: -item.quantity } },
-                { new: true }
+                { returnDocument: 'after' } // ✅ Use returnDocument instead of new
             );
         }
 
-        // Populate the order with product details for the response
+        // ✅ Populate the order for response
         const populatedOrder = await Order.findById(newOrder._id)
-            .populate('storeId', 'name address')
+            .populate('storeId', 'name address location')
             .populate('items.productId', 'name price unit image_url');
+
+        // ✅ Auto-assign rider (optional)
+        const assignedRider = await assignRiderToOrder(newOrder);
 
         res.status(201).json({
             success: true,
             message: 'Order placed successfully!',
-            data: populatedOrder
+            data: populatedOrder,
+            storeAssigned: bestStore.name,
+            riderAssigned: !!assignedRider
         });
 
     } catch (error) {
@@ -101,7 +206,7 @@ exports.createOrder = async (req, res) => {
 exports.getAllOrders = async (req, res) => {
     try {
         const { status, storeId, startDate, endDate } = req.query;
-        
+
         // Build filter
         const filter = {};
         if (status) filter.status = status;
@@ -113,8 +218,9 @@ exports.getAllOrders = async (req, res) => {
         }
 
         const orders = await Order.find(filter)
-            .populate('storeId', 'name address')
+            .populate('storeId', 'name')
             .populate('items.productId', 'name price unit image_url')
+            .populate('riderId', 'name phone')
             .sort({ createdAt: -1 });
 
         res.json({
@@ -133,7 +239,7 @@ exports.getAllOrders = async (req, res) => {
 exports.getOrder = async (req, res) => {
     try {
         const { id } = req.params;
-        
+
         const order = await Order.findById(id)
             .populate('storeId', 'name address location')
             .populate('items.productId', 'name price unit image_url category')
@@ -164,8 +270,8 @@ exports.updateOrder = async (req, res) => {
         // Validate status
         const validStatuses = ['pending', 'picking', 'dispatched', 'delivered', 'cancelled'];
         if (!validStatuses.includes(status)) {
-            return res.status(400).json({ 
-                error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+            return res.status(400).json({
+                error: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
             });
         }
 
@@ -182,7 +288,7 @@ exports.updateOrder = async (req, res) => {
         // If status is cancelled, add cancelledAt timestamp
         if (status === 'cancelled') {
             updateData.cancelledAt = new Date();
-            
+
             // Restore inventory when order is cancelled
             const order = await Order.findById(id);
             if (order && order.status !== 'delivered') {
@@ -237,7 +343,7 @@ exports.assignRider = async (req, res) => {
 
         const order = await Order.findByIdAndUpdate(
             id,
-            { 
+            {
                 riderId,
                 status: 'dispatched',
                 assignedAt: new Date()
@@ -293,20 +399,52 @@ exports.getOrdersByStore = async (req, res) => {
 // ==================== GET ORDERS BY CUSTOMER ====================
 exports.getOrdersByCustomer = async (req, res) => {
     try {
-        const { phone } = req.query;
+        const { phone, status, limit = 20, page = 1 } = req.query;
 
-        if (!phone) {
+        // ✅ Security: Users can only view their own orders
+        const isAdmin = req.user?.role === 'admin';
+        const targetPhone = phone || req.user?.phone;
+
+        if (!isAdmin && phone && phone !== req.user?.phone) {
+            return res.status(403).json({
+                error: 'You can only view your own orders'
+            });
+        }
+
+        if (!targetPhone) {
             return res.status(400).json({ error: 'Phone number is required' });
         }
 
-        const orders = await Order.find({ customerPhone: phone })
-            .populate('storeId', 'name address')
-            .populate('items.productId', 'name price unit')
-            .sort({ createdAt: -1 });
+        // ✅ BUILD FILTER
+        const filter = { customerPhone: targetPhone };
+
+        // ✅ ADD STATUS FILTER (if provided)
+        if (status && status !== 'all') {
+            filter.status = status;  // 👈 This is the key line!
+        }
+
+        // ✅ PAGINATION
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        console.log(`🔍 Phone: ${targetPhone}, Status: ${status || 'all'}`);
+
+        const [orders, totalCount] = await Promise.all([
+            Order.find(filter)  // 👈 filter now includes status
+                .populate('storeId', 'name address')
+                .populate('items.productId', 'name price unit image_url')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit)),
+            Order.countDocuments(filter)
+        ]);
 
         res.json({
             success: true,
             count: orders.length,
+            total: totalCount,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages: Math.ceil(totalCount / parseInt(limit)),
             data: orders
         });
 
@@ -394,8 +532,8 @@ exports.deleteOrder = async (req, res) => {
 
         // Only allow deletion if order is pending or cancelled
         if (order.status !== 'pending' && order.status !== 'cancelled') {
-            return res.status(400).json({ 
-                error: 'Only pending or cancelled orders can be deleted' 
+            return res.status(400).json({
+                error: 'Only pending or cancelled orders can be deleted'
             });
         }
 

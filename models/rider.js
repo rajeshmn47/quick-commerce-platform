@@ -97,4 +97,5 @@ const riderSchema = new mongoose.Schema({
 riderSchema.index({ currentStoreId: 1, isAvailable: 1 });
 riderSchema.index({ currentLocation: '2dsphere' });
 
-module.exports = mongoose.model('Rider', riderSchema);
+const Rider = mongoose.model('Rider', riderSchema);
+module.exports = Rider;
