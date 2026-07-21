@@ -3,6 +3,8 @@ const router = express.Router();
 const orderController = require('../controllers/orderController');
 
 router.post('/', orderController.createOrder);
+router.get('/customer', orderController.getOrdersByCustomer);
+router.get('/store/:storeId', orderController.getOrdersByStore);
 router.get('/:id', orderController.getOrder);
 router.put('/:id', orderController.updateOrder);
 router.delete('/:id', orderController.deleteOrder);

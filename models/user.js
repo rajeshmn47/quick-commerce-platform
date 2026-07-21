@@ -54,18 +54,19 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // ✅ CORRECT: Async/Await without `next`
-userSchema.pre('save', async function() {
+userSchema.pre('save', async function () {
     // Only hash if password is modified
     if (!this.isModified('password')) return;
-    
+
     // Generate salt and hash password
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
 });
 
 // ✅ Compare password method (unchanged)
-userSchema.methods.comparePassword = async function(candidatePassword) {
+userSchema.methods.comparePassword = async function (candidatePassword) {
     return await bcrypt.compare(candidatePassword, this.password);
 };
 
-module.exports = mongoose.model('User', userSchema);
+const User = mongoose.model('User', userSchema);
+module.exports = User;
