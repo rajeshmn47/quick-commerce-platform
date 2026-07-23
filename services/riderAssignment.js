@@ -57,7 +57,7 @@ const assignRiderToOrder = async (order) => {
     try {
         // Find the best available rider
         const rider = await findBestRider(order.storeId);
-        
+
         if (!rider) {
             console.log(`⚠️ No rider available for order ${order._id}`);
             return null;
@@ -71,9 +71,7 @@ const assignRiderToOrder = async (order) => {
 
         // Update rider's active orders count
         rider.activeOrdersCount += 1;
-        if (rider.activeOrdersCount >= rider.maxConcurrentOrders) {
-            rider.isAvailable = false;
-        }
+        rider.isAvailable = false;
         await rider.save();
 
         console.log(`✅ Assigned order ${order._id} to rider ${rider.name}`);
@@ -137,12 +135,7 @@ const assignPendingOrderToRider = async (rider) => {
         pendingOrder.status = 'dispatched';
         pendingOrder.assignedAt = new Date();
         await pendingOrder.save();
-
-        // Update rider's active count
-        rider.activeOrdersCount += 1;
-        if (rider.activeOrdersCount >= rider.maxConcurrentOrders) {
-            rider.isAvailable = false;
-        }
+        rider.isAvailable = false;
         await rider.save();
 
         console.log(`🔄 Assigned pending order ${pendingOrder._id} to rider ${rider.name}`);

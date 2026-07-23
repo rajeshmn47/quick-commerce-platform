@@ -21,6 +21,7 @@ const productRoutes = require('./routes/productRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const riderRoutes = require('./routes/riderRoutes');
+const zoneRoutes = require('./routes/zoneRoutes')
 
 // Import middleware
 const { verifyToken, checkRole } = require('./middleware/auth');
@@ -33,7 +34,7 @@ app.use('/api/stores', verifyToken, storeRoutes);
 app.use('/api/products', verifyToken, productRoutes);
 app.use('/api/inventory', verifyToken, inventoryRoutes);
 app.use('/api/orders', verifyToken, orderRoutes);
-
+app.use('/api/zones',verifyToken,zoneRoutes);
 // Admin-only route example
 app.get('/api/admin/dashboard', verifyToken, checkRole('admin'), (req, res) => {
     res.json({ message: 'Welcome Admin!' });

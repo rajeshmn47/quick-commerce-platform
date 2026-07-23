@@ -4,22 +4,25 @@ const Store = require('../models/store');
 const Product = require('../models/product');
 const Rider = require('../models/rider');
 const { assignRiderToOrder } = require('../services/riderAssignment');
+const Zone = require('../models/zone');
 
 async function findBestStore(customerLat, customerLng, items) {
     // 1️⃣ Find stores within 10 km
-    const nearbyStores = await Store.find({
-        location: {
-            $near: {
+    const zone = await Zone.find({
+        boundary: {
+            $geoIntersects: {
                 $geometry: {
                     type: 'Point',
                     coordinates: [
                         customerLng,
                         customerLat
                     ]
-                },
-                $maxDistance: 100000 // 10 km
+                }
             }
         }
+    })
+    const nearbyStores = await Store.find({
+        _id: zone[0].storeId
     });
     console.log(nearbyStores.length, customerLng, customerLat, "near by stores");
 
@@ -42,16 +45,8 @@ async function findBestStore(customerLat, customerLng, items) {
         }
         if (!hasAllItems) continue;
 
-        // 3️⃣ Check if store has an available rider
-        const rider = await Rider.findOne({
-            currentStoreId: store._id,
-            isAvailable: true,
-            $expr: { $lt: ['$activeOrdersCount', '$maxConcurrentOrders'] }
-        });
-
         eligibleStores.push({
             store,
-            hasRider: !!rider,
             distance: calculateDistance(
                 customerLat, customerLng,
                 store.location.coordinates?.[1],
@@ -59,17 +54,6 @@ async function findBestStore(customerLat, customerLng, items) {
             )
         });
     }
-
-    if (eligibleStores.length === 0) return null;
-
-    // 4️⃣ Sort: Has rider first, then closest
-    eligibleStores.sort((a, b) => {
-        if (a.hasRider && !b.hasRider) return -1;
-        if (!a.hasRider && b.hasRider) return 1;
-        return a.distance - b.distance;
-    });
-    console.log(eligibleStores, "stores");
-
     return eligibleStores[0].store;
 }
 
@@ -155,14 +139,15 @@ exports.createOrder = async (req, res) => {
             customerPhone,
             address,
             items,
+            finalAmount: totalAmount,
             totalAmount,
             deliveryInstructions: deliveryInstructions || '',
             customerLocation: {
                 type: 'Point',
-                coordinates: {
-                    latitude: customerLatitude,
-                    longitude: customerLongitude
-                }
+                coordinates: [
+                    customerLongitude,
+                    customerLatitude
+                ]
             },
             customerPincode: customerPincode || null,
             status: 'pending',
